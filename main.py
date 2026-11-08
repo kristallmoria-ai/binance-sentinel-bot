@@ -26,13 +26,13 @@ SYMBOLS = [
     "BTC/USDT:USDT",
     "ETH/USDT:USDT",
     "SOL/USDT:USDT",
-    "DOGE/USDT:USDT",
     "XRP/USDT:USDT",
-    "SUI/USDT:USDT",
+    "ADA/USDT:USDT",
     "AVAX/USDT:USDT",
-    "BNB/USDT:USDT",
+    "SUI/USDT:USDT",
+    "NEAR/USDT:USDT",
     "LINK/USDT:USDT",
-    "NEAR/USDT:USDT"
+    "APT/USDT:USDT"
 ]
 
 LEVERAGE = 3  # Safe 3x leverage
@@ -425,7 +425,7 @@ def index_ui():
             <div class="metric-card">
                 <div class="metric-label">Taranan Pariteler</div>
                 <div class="metric-value" id="m-symbols">10 / 10</div>
-                <div class="metric-sub">BTC, ETH, SOL, XRP, DOGE...</div>
+                <div class="metric-sub">BTC, ETH, SOL, XRP, ADA, AVAX...</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">Risk Yönetimi</div>
@@ -503,7 +503,7 @@ def index_ui():
     </div>
 
     <script>
-        const pairs = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "DOGE/USDT", "XRP/USDT", "SUI/USDT", "AVAX/USDT", "BNB/USDT", "LINK/USDT", "NEAR/USDT"];
+        const pairs = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "AVAX/USDT", "SUI/USDT", "NEAR/USDT", "LINK/USDT", "APT/USDT"];
         
         // Render pairs grid
         const pCont = document.getElementById('pairs-container');
