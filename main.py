@@ -489,6 +489,7 @@ async def trading_loop():
             "apiKey": API_KEY,
             "secret": SECRET_KEY,
             "enableRateLimit": True,
+            "timeout": 10000,
             "options": {"defaultType": "future"}
         }
         exchange = ccxt.binance(exchange_params)
@@ -497,8 +498,7 @@ async def trading_loop():
             exchange.enable_demo_trading(True)
             logger.info("DEMO TRADING ENABLED (demo.binance.com)")
 
-        await exchange.load_markets()
-        logger.info(f"Loaded {len(SYMBOLS)} markets on Binance Futures Demo.")
+        logger.info(f"Initialized CCXT Binance Demo engine for {len(SYMBOLS)} symbols.")
 
         while True:
             try:
@@ -548,11 +548,9 @@ async def trading_loop():
                                 tp = round(curr_price - tp_dist, 4)
 
                             raw_qty = MIN_NOTIONAL_USD / curr_price
-                            market = exchange.market(symbol)
-                            precision = market.get("precision", {}).get("amount", 2)
-                            qty = round(raw_qty, precision) if precision > 0 else int(raw_qty)
+                            qty = round(raw_qty, 2)
                             if qty <= 0:
-                                qty = market.get("limits", {}).get("amount", {}).get("min", 1)
+                                qty = 1.0
 
                             order_id = "DEMO"
                             # PLACE REAL ORDER ON BINANCE DEMO FUTURES
@@ -631,6 +629,9 @@ async def trading_loop():
             await asyncio.sleep(10)
 
     except Exception as fatal_ex:
+        global thread_error
+        import traceback
+        thread_error = traceback.format_exc()
         logger.critical(f"FATAL trading_loop initialization error: {fatal_ex}")
 
 def start_bot_thread():
