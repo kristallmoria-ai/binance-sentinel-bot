@@ -491,7 +491,7 @@ async def trading_loop():
             "secret": SECRET_KEY,
             "enableRateLimit": True,
             "timeout": 10000,
-            "options": {"defaultType": "future"}
+            "options": {"defaultType": "future", "fetchCurrencies": False}
         }
         exchange = ccxt.binance(exchange_params)
         
@@ -535,7 +535,13 @@ async def trading_loop():
 
                 for symbol in SYMBOLS:
                     try:
-                        candles = await exchange.fetch_ohlcv(symbol, timeframe="15m", limit=60)
+                        try:
+                            candles = await exchange.fetch_ohlcv(symbol, timeframe="15m", limit=60)
+                        except Exception as fe:
+                            pair = symbol.replace("/USDT:USDT", "USDT").replace("/USDT", "USDT")
+                            url = f"https://demo-fapi.binance.com/fapi/v1/klines?symbol={pair}&interval=15m&limit=60"
+                            resp = requests.get(url, timeout=5).json()
+                            candles = [[float(x) for x in k[:6]] for k in resp]
                         ind = calculate_indicators(candles)
                         if not ind:
                             continue
