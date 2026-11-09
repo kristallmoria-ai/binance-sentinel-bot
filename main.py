@@ -4,6 +4,7 @@ import asyncio
 import logging
 from datetime import datetime
 from typing import List, Dict, Any
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse, Response
 import uvicorn
@@ -53,6 +54,7 @@ bot_state = {
     "active_positions": {},
     "trade_history": [],
     "last_scan_time": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
+    "cycle_count": 0,
     "market_prices": {}
 }
 
@@ -477,151 +479,163 @@ def calculate_indicators(candles: List[List[float]]) -> Dict[str, Any]:
 
 async def trading_loop():
     logger.info("Initializing Binance Demo Trading Engine...")
-    exchange_params = {
-        "apiKey": API_KEY,
-        "secret": SECRET_KEY,
-        "enableRateLimit": True,
-        "options": {"defaultType": "future"}
-    }
-    exchange = ccxt.binance(exchange_params)
-    
-    if USE_BINANCE_DEMO:
-        exchange.enable_demo_trading(True)
-        logger.info("DEMO TRADING ENABLED (demo.binance.com)")
+    try:
+        exchange_params = {
+            "apiKey": API_KEY,
+            "secret": SECRET_KEY,
+            "enableRateLimit": True,
+            "options": {"defaultType": "future"}
+        }
+        exchange = ccxt.binance(exchange_params)
+        
+        if USE_BINANCE_DEMO:
+            exchange.enable_demo_trading(True)
+            logger.info("DEMO TRADING ENABLED (demo.binance.com)")
 
-    await exchange.load_markets()
-    logger.info(f"Loaded {len(SYMBOLS)} markets on Binance Futures Demo.")
+        await exchange.load_markets()
+        logger.info(f"Loaded {len(SYMBOLS)} markets on Binance Futures Demo.")
 
-    while True:
-        try:
-            bot_state["last_scan_time"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-
-            # Update balance periodically
+        while True:
             try:
-                bal = await exchange.fetch_balance()
-                if "USDT" in bal and "total" in bal["USDT"]:
-                    bot_state["account_balance"] = round(bal["USDT"]["total"], 2)
-            except Exception as be:
-                logger.debug(f"Balance check notice: {be}")
+                bot_state["cycle_count"] += 1
+                bot_state["last_scan_time"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
-            for symbol in SYMBOLS:
+                # Update balance periodically
                 try:
-                    candles = await exchange.fetch_ohlcv(symbol, timeframe="15m", limit=60)
-                    ind = calculate_indicators(candles)
-                    if not ind:
-                        continue
+                    bal = await exchange.fetch_balance()
+                    if "USDT" in bal and "total" in bal["USDT"]:
+                        bot_state["account_balance"] = round(bal["USDT"]["total"], 2)
+                except Exception as be:
+                    logger.debug(f"Balance check notice: {be}")
 
-                    curr_price = ind["price"]
-                    bot_state["market_prices"][symbol] = curr_price
-                    rsi = ind["rsi"]
-                    ema_f = ind["ema_fast"]
-                    ema_s = ind["ema_slow"]
-                    vol_spike = ind["vol_spike"]
-                    atr = ind["atr"]
+                for symbol in SYMBOLS:
+                    try:
+                        candles = await exchange.fetch_ohlcv(symbol, timeframe="15m", limit=60)
+                        ind = calculate_indicators(candles)
+                        if not ind:
+                            continue
 
-                    # Entry Conditions
-                    signal = None
-                    if ema_f > ema_s and 38 <= rsi <= 55 and vol_spike:
-                        signal = "LONG"
-                    elif ema_f < ema_s and 45 <= rsi <= 62 and vol_spike:
-                        signal = "SHORT"
+                        curr_price = ind["price"]
+                        bot_state["market_prices"][symbol] = curr_price
+                        rsi = ind["rsi"]
+                        ema_f = ind["ema_fast"]
+                        ema_s = ind["ema_slow"]
+                        vol_spike = ind["vol_spike"]
+                        atr = ind["atr"]
 
-                    # Manage signals
-                    if signal and symbol not in bot_state["active_positions"] and len(bot_state["active_positions"]) < 3:
-                        sl_dist = atr * 1.5
-                        tp_dist = sl_dist * TARGET_RR
+                        # Entry Conditions
+                        signal = None
+                        if ema_f > ema_s and 38 <= rsi <= 55 and vol_spike:
+                            signal = "LONG"
+                        elif ema_f < ema_s and 45 <= rsi <= 62 and vol_spike:
+                            signal = "SHORT"
 
-                        if signal == "LONG":
-                            sl = round(curr_price - sl_dist, 4)
-                            tp = round(curr_price + tp_dist, 4)
-                        else:
-                            sl = round(curr_price + sl_dist, 4)
-                            tp = round(curr_price - tp_dist, 4)
+                        # Manage signals
+                        if signal and symbol not in bot_state["active_positions"] and len(bot_state["active_positions"]) < 3:
+                            sl_dist = atr * 1.5
+                            tp_dist = sl_dist * TARGET_RR
 
-                        raw_qty = MIN_NOTIONAL_USD / curr_price
-                        market = exchange.market(symbol)
-                        precision = market.get("precision", {}).get("amount", 2)
-                        qty = round(raw_qty, precision) if precision > 0 else int(raw_qty)
-                        if qty <= 0:
-                            qty = market.get("limits", {}).get("amount", {}).get("min", 1)
+                            if signal == "LONG":
+                                sl = round(curr_price - sl_dist, 4)
+                                tp = round(curr_price + tp_dist, 4)
+                            else:
+                                sl = round(curr_price + sl_dist, 4)
+                                tp = round(curr_price - tp_dist, 4)
 
-                        order_id = "DEMO"
-                        # PLACE REAL ORDER ON BINANCE DEMO FUTURES
-                        if USE_BINANCE_DEMO and API_KEY and SECRET_KEY:
-                            try:
-                                await exchange.set_leverage(LEVERAGE, symbol)
-                                side = "buy" if signal == "LONG" else "sell"
-                                order = await exchange.create_market_order(symbol, side, qty)
-                                order_id = order.get("id", "DEMO")
-                                logger.info(f"REAL DEMO ORDER EXECUTED ON BINANCE: {symbol} {side} {qty} (ID: {order_id})")
-                            except Exception as ex:
-                                logger.error(f"Binance demo order error for {symbol}: {ex}")
+                            raw_qty = MIN_NOTIONAL_USD / curr_price
+                            market = exchange.market(symbol)
+                            precision = market.get("precision", {}).get("amount", 2)
+                            qty = round(raw_qty, precision) if precision > 0 else int(raw_qty)
+                            if qty <= 0:
+                                qty = market.get("limits", {}).get("amount", {}).get("min", 1)
 
-                        trade_info = {
-                            "symbol": symbol,
-                            "side": signal,
-                            "entry_price": curr_price,
-                            "stop_loss": sl,
-                            "take_profit": tp,
-                            "qty": qty,
-                            "order_id": order_id,
-                            "timestamp": datetime.utcnow().strftime("%H:%M:%S UTC")
-                        }
+                            order_id = "DEMO"
+                            # PLACE REAL ORDER ON BINANCE DEMO FUTURES
+                            if USE_BINANCE_DEMO and API_KEY and SECRET_KEY:
+                                try:
+                                    await exchange.set_leverage(LEVERAGE, symbol)
+                                    side = "buy" if signal == "LONG" else "sell"
+                                    order = await exchange.create_market_order(symbol, side, qty)
+                                    order_id = order.get("id", "DEMO")
+                                    logger.info(f"REAL DEMO ORDER EXECUTED ON BINANCE: {symbol} {side} {qty} (ID: {order_id})")
+                                except Exception as ex:
+                                    logger.error(f"Binance demo order error for {symbol}: {ex}")
 
-                        bot_state["active_positions"][symbol] = trade_info
+                            trade_info = {
+                                "symbol": symbol,
+                                "side": signal,
+                                "entry_price": curr_price,
+                                "stop_loss": sl,
+                                "take_profit": tp,
+                                "qty": qty,
+                                "order_id": order_id,
+                                "timestamp": datetime.utcnow().strftime("%H:%M:%S UTC")
+                            }
 
-                        tg_msg = (
-                            f"🚨 *YENİ BİNANCE TESTNET İŞLEMİ AÇILDI ({signal})*\n"
-                            f"Parite: `{symbol}`\n"
-                            f"Giriş: `${curr_price}`\n"
-                            f"Stop Loss: `${sl}`\n"
-                            f"Take Profit: `${tp}`\n"
-                            f"Kaldıraç: `3x İzole`\n"
-                            f"Miktar: `{qty}`\n"
-                            f"Emir No: `{order_id}`\n"
-                            f"Platform: `demo.binance.com`"
-                        )
-                        send_telegram(tg_msg)
+                            bot_state["active_positions"][symbol] = trade_info
 
-                except Exception as ex:
-                    logger.debug(f"Scan error on {symbol}: {ex}")
+                            tg_msg = (
+                                f"🚨 *YENİ BİNANCE TESTNET İŞLEMİ AÇILDI ({signal})*\n"
+                                f"Parite: `{symbol}`\n"
+                                f"Giriş: `${curr_price}`\n"
+                                f"Stop Loss: `${sl}`\n"
+                                f"Take Profit: `${tp}`\n"
+                                f"Kaldıraç: `3x İzole`\n"
+                                f"Miktar: `{qty}`\n"
+                                f"Emir No: `{order_id}`\n"
+                                f"Platform: `demo.binance.com`"
+                            )
+                            send_telegram(tg_msg)
 
-                await asyncio.sleep(1)
+                    except Exception as ex:
+                        logger.debug(f"Scan error on {symbol}: {ex}")
 
-            # Check open positions for exit
-            for sym, pos in list(bot_state["active_positions"].items()):
-                try:
-                    ticker = await exchange.fetch_ticker(sym)
-                    curr = ticker["last"]
-                    hit_tp = (pos["side"] == "LONG" and curr >= pos["take_profit"]) or (pos["side"] == "SHORT" and curr <= pos["take_profit"])
-                    hit_sl = (pos["side"] == "LONG" and curr <= pos["stop_loss"]) or (pos["side"] == "SHORT" and curr >= pos["stop_loss"])
+                    await asyncio.sleep(1)
 
-                    if hit_tp or hit_sl:
-                        outcome = "KÂR ALINDI (TP) 🎯" if hit_tp else "STOP OLDU (SL) 🛑"
-                        if USE_BINANCE_DEMO and API_KEY and SECRET_KEY:
-                            try:
-                                close_side = "sell" if pos["side"] == "LONG" else "buy"
-                                await exchange.create_market_order(sym, close_side, pos["qty"], params={"reduceOnly": True})
-                                logger.info(f"REAL DEMO POSITION CLOSED ON BINANCE: {sym} ({outcome})")
-                            except Exception as ex:
-                                logger.error(f"Close order failed on Binance: {ex}")
+                # Check open positions for exit
+                for sym, pos in list(bot_state["active_positions"].items()):
+                    try:
+                        ticker = await exchange.fetch_ticker(sym)
+                        curr = ticker["last"]
+                        hit_tp = (pos["side"] == "LONG" and curr >= pos["take_profit"]) or (pos["side"] == "SHORT" and curr <= pos["take_profit"])
+                        hit_sl = (pos["side"] == "LONG" and curr <= pos["stop_loss"]) or (pos["side"] == "SHORT" and curr >= pos["stop_loss"])
 
-                        pnl = ((curr - pos["entry_price"]) * pos["qty"]) if pos["side"] == "LONG" else ((pos["entry_price"] - curr) * pos["qty"])
-                        bot_state["trade_history"].append({**pos, "exit": curr, "pnl": pnl, "outcome": outcome})
-                        del bot_state["active_positions"][sym]
-                        
-                        send_telegram(f"📢 *BİNANCE TESTNET POZİSYON KAPANDI*\nParite: `{sym}`\nSonuç: *{outcome}*\nÇıkış Fiyatı: `${curr}`\nNet K/Z: `${pnl:.2f}`")
-                except Exception as e:
-                    pass
+                        if hit_tp or hit_sl:
+                            outcome = "KÂR ALINDI (TP) 🎯" if hit_tp else "STOP OLDU (SL) 🛑"
+                            if USE_BINANCE_DEMO and API_KEY and SECRET_KEY:
+                                try:
+                                    close_side = "sell" if pos["side"] == "LONG" else "buy"
+                                    await exchange.create_market_order(sym, close_side, pos["qty"], params={"reduceOnly": True})
+                                    logger.info(f"REAL DEMO POSITION CLOSED ON BINANCE: {sym} ({outcome})")
+                                except Exception as ex:
+                                    logger.error(f"Close order failed on Binance: {ex}")
 
-        except Exception as loop_ex:
-            logger.error(f"Global loop error caught, auto-recovering in 10s: {loop_ex}")
+                            pnl = ((curr - pos["entry_price"]) * pos["qty"]) if pos["side"] == "LONG" else ((pos["entry_price"] - curr) * pos["qty"])
+                            bot_state["trade_history"].append({**pos, "exit": curr, "pnl": pnl, "outcome": outcome})
+                            del bot_state["active_positions"][sym]
+                            
+                            send_telegram(f"📢 *BİNANCE TESTNET POZİSYON KAPANDI*\nParite: `{sym}`\nSonuç: *{outcome}*\nÇıkış Fiyatı: `${curr}`\nNet K/Z: `${pnl:.2f}`")
+                    except Exception as e:
+                        pass
 
-        await asyncio.sleep(15)
+                logger.info(f"Scan cycle #{bot_state['cycle_count']} finished at {bot_state['last_scan_time']}")
 
-@app.on_event("startup")
-async def startup_event():
-    asyncio.create_task(trading_loop())
+            except Exception as loop_ex:
+                logger.error(f"Global loop error caught: {loop_ex}")
+
+            await asyncio.sleep(15)
+
+    except Exception as fatal_ex:
+        logger.critical(f"FATAL trading_loop initialization error: {fatal_ex}")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    task = asyncio.create_task(trading_loop())
+    yield
+    task.cancel()
+
+# Re-assign lifespan to app
+app.router.lifespan_context = lifespan
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=PORT)
