@@ -474,12 +474,17 @@ def calculate_indicators(candles: List[List[float]]) -> Dict[str, Any]:
         trs.append(tr)
     atr = sum(trs[-14:]) / 14 if len(trs) >= 14 else trs[-1]
 
+    bb_slice = closes[-20:]
+    mid_bb = sum(bb_slice) / len(bb_slice)
+    std_bb = (sum([(x - mid_bb)**2 for x in bb_slice]) / len(bb_slice))**0.5
+
     return {
         "price": closes[-1],
         "ema_fast": ema_fast,
         "ema_slow": ema_slow,
         "rsi": rsi,
-        "vol_spike": vol_spike,
+        "lower_bb": mid_bb - 2 * std_bb,
+        "upper_bb": mid_bb + 2 * std_bb,
         "atr": atr
     }
 
@@ -513,6 +518,7 @@ async def trading_loop():
             "options": {"defaultType": "future", "fetchCurrencies": False}
         }
         exchange = ccxt.binance(exchange_params)
+        exchange.has["fetchCurrencies"] = False
         
         if USE_BINANCE_DEMO:
             if hasattr(exchange, 'enable_demo_trading'):
@@ -572,18 +578,19 @@ async def trading_loop():
                         rsi = ind["rsi"]
                         ema_f = ind["ema_fast"]
                         ema_s = ind["ema_slow"]
-                        vol_spike = ind["vol_spike"]
                         atr = ind["atr"]
+                        lower_bb = ind["lower_bb"]
+                        upper_bb = ind["upper_bb"]
 
-                        # Entry Conditions
+                        # Active & Responsive Entry Conditions (Dip bounce & Mean reversion)
                         signal = None
-                        if ema_f > ema_s and 38 <= rsi <= 55 and vol_spike:
+                        if rsi <= 38 or curr_price <= lower_bb or (ema_f > ema_s and 40 <= rsi <= 54):
                             signal = "LONG"
-                        elif ema_f < ema_s and 45 <= rsi <= 62 and vol_spike:
+                        elif rsi >= 62 or curr_price >= upper_bb or (ema_f < ema_s and 46 <= rsi <= 60):
                             signal = "SHORT"
 
-                        # Manage signals
-                        if signal and symbol not in bot_state["active_positions"] and len(bot_state["active_positions"]) < 3:
+                        # Manage signals (Max 2 concurrent positions for $12 wallet)
+                        if signal and symbol not in bot_state["active_positions"] and len(bot_state["active_positions"]) < 2:
                             sl_dist = atr * 1.5
                             tp_dist = sl_dist * TARGET_RR
 
