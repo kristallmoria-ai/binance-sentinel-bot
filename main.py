@@ -78,6 +78,22 @@ def favicon():
     svg = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="45" fill="#10b981"/><path d="M50 20 L75 75 L25 75 Z" fill="#ffffff"/></svg>'
     return Response(content=svg, media_type="image/svg+xml")
 
+@app.get("/api/debug_order")
+async def debug_order():
+    global exchange
+    res = {}
+    try:
+        sym = "BTC/USDT:USDT"
+        lev_res = await exchange.set_leverage(LEVERAGE, sym)
+        res["leverage"] = lev_res
+        order_res = await exchange.create_market_order(sym, "sell", 0.001)
+        res["order"] = order_res
+    except Exception as e:
+        import traceback
+        res["error"] = f"{type(e).__name__}: {str(e)}"
+        res["trace"] = traceback.format_exc()
+    return res
+
 @app.get("/api/state")
 def get_state():
     bot_state["thread_error"] = thread_error
@@ -506,8 +522,10 @@ def get_order_qty(symbol: str, price: float, notional: float = 6.0) -> float:
         return round(max(raw, 5.0), 1)
     return round(max(raw, 0.1), 2)
 
+exchange = None
+
 async def trading_loop():
-    global thread_error
+    global thread_error, exchange
     logger.info("Initializing Binance Demo Trading Engine...")
     try:
         exchange_params = {
@@ -610,9 +628,11 @@ async def trading_loop():
                                     await exchange.set_leverage(LEVERAGE, symbol)
                                     side = "buy" if signal == "LONG" else "sell"
                                     order = await exchange.create_market_order(symbol, side, qty)
-                                    order_id = order.get("id", "DEMO")
+                                    order_id = str(order.get("id", "DEMO"))
+                                    bot_state["last_order_success"] = f"{symbol} {side} {qty} (ID: {order_id})"
                                     logger.info(f"REAL DEMO ORDER EXECUTED ON BINANCE: {symbol} {side} {qty} (ID: {order_id})")
                                 except Exception as ex:
+                                    bot_state["last_order_error"] = f"{symbol}: {type(ex).__name__} - {str(ex)}"
                                     logger.error(f"Binance demo order error for {symbol}: {ex}")
 
                             trade_info = {
