@@ -533,7 +533,11 @@ async def trading_loop():
             "secret": SECRET_KEY,
             "enableRateLimit": True,
             "timeout": 10000,
-            "options": {"defaultType": "future", "fetchCurrencies": False}
+            "options": {
+                "defaultType": "future",
+                "fetchMarkets": ["linear"],
+                "fetchCurrencies": False
+            }
         }
         exchange = ccxt.binance(exchange_params)
         exchange.has["fetchCurrencies"] = False
@@ -559,6 +563,13 @@ async def trading_loop():
                 exchange.urls['api'].update(demo_urls)
                 exchange.options['enableDemoTrading'] = True
             logger.info("DEMO TRADING ENABLED (demo.binance.com)")
+
+        try:
+            logger.info("Pre-loading linear futures markets for Binance Demo...")
+            await exchange.load_markets()
+            logger.info(f"Loaded {len(exchange.markets)} linear futures markets successfully.")
+        except Exception as lme:
+            logger.warning(f"Markets pre-load warning: {lme}")
 
         thread_error = None
         logger.info(f"Initialized CCXT Binance Demo engine for {len(SYMBOLS)} symbols.")
