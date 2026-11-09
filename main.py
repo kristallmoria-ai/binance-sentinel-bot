@@ -1,6 +1,7 @@
 import os
 import time
 import asyncio
+import threading
 import logging
 from datetime import datetime
 from typing import List, Dict, Any
@@ -590,7 +591,7 @@ async def trading_loop():
                     except Exception as ex:
                         logger.debug(f"Scan error on {symbol}: {ex}")
 
-                    await asyncio.sleep(1)
+                    await asyncio.sleep(0.5)
 
                 # Check open positions for exit
                 for sym, pos in list(bot_state["active_positions"].items()):
@@ -623,19 +624,16 @@ async def trading_loop():
             except Exception as loop_ex:
                 logger.error(f"Global loop error caught: {loop_ex}")
 
-            await asyncio.sleep(15)
+            await asyncio.sleep(10)
 
     except Exception as fatal_ex:
         logger.critical(f"FATAL trading_loop initialization error: {fatal_ex}")
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    task = asyncio.create_task(trading_loop())
-    yield
-    task.cancel()
+def start_bot_thread():
+    asyncio.run(trading_loop())
 
-# Re-assign lifespan to app
-app.router.lifespan_context = lifespan
+# Start autonomous trading loop in a dedicated background daemon thread
+threading.Thread(target=start_bot_thread, daemon=True).start()
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=PORT)
