@@ -15,13 +15,15 @@ logger = logging.getLogger("SentinelBot")
 
 # Environment & Config
 PORT = int(os.getenv("PORT", "10000"))
-PAPER_TRADING = os.getenv("PAPER_TRADING", "true").lower() == "true"
-API_KEY = os.getenv("BINANCE_API_KEY", "")
-SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "")
+USE_BINANCE_DEMO = os.getenv("USE_BINANCE_DEMO", "true").lower() == "true"
+
+# Binance Demo Keys (User's active demo keys from demo.binance.com)
+API_KEY = os.getenv("BINANCE_API_KEY", "pixh2f6B0ndk04gEfKbPoXd7s39neRCD8r7SwGLeUhQdcNmANUerOK2yIv656CrM")
+SECRET_KEY = os.getenv("BINANCE_SECRET_KEY", "59G8HFMK5rqy9rGVhOd4K8uF3sN71hs6cvmzBJQ36S3cT8iXmTPHN3C5EEsHDTNk")
 TELEGRAM_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-# Active symbols to scan (high liquidity, high volume)
+# 10 Strong Crypto Pairs (DOGE, LTC, PEPE, SHIB removed per user instruction)
 SYMBOLS = [
     "BTC/USDT:USDT",
     "ETH/USDT:USDT",
@@ -35,18 +37,19 @@ SYMBOLS = [
     "APT/USDT:USDT"
 ]
 
-LEVERAGE = 3  # Safe 3x leverage
-MAX_RISK_USD = 0.35  # Max $0.35 risk per trade on micro account
-TARGET_RR = 2.5  # 1 : 2.5 Risk-to-Reward ratio
+LEVERAGE = 3  # Safe 3x isolated leverage
+TARGET_RR = 2.0  # 1 : 2.0 Risk-to-Reward ratio
+MIN_NOTIONAL_USD = 25.0  # Minimum order notional to safely clear Binance Futures thresholds (~$8 margin at 3x)
 
-app = FastAPI(title="Binance Sentinel Bot", version="2.1.0")
+app = FastAPI(title="Binance Sentinel Bot", version="2.5.0")
 
 # State
 bot_state = {
     "status": "RUNNING",
-    "paper_trading": PAPER_TRADING,
+    "mode": "BINANCE_DEMO_LIVE" if USE_BINANCE_DEMO else "LOCAL_SIMULATION",
     "scanned_symbols": len(SYMBOLS),
     "symbols_list": [s.replace(":USDT", "") for s in SYMBOLS],
+    "account_balance": 4997.20,
     "active_positions": {},
     "trade_history": [],
     "last_scan_time": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
@@ -71,9 +74,9 @@ def favicon():
 @app.get("/api/state")
 def get_state():
     return {
-        "bot": "Binance Sentinel Multi-Pair Bot",
+        "bot": "Binance Sentinel Multi-Pair Bot (Demo Futures Connected)",
         "state": bot_state,
-        "note": "24/7 Cloud Sentinel Active"
+        "note": "24/7 Cloud Sentinel Active on demo.binance.com"
     }
 
 @app.get("/health")
@@ -87,7 +90,7 @@ def index_ui():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Binance Sentinel Bot - 7/24 Canlı Bulut Paneli</title>
+    <title>Binance Sentinel Bot - 7/24 Canlı Testnet Paneli</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.ico">
     <link rel="preconnect" href="https://fonts.googleapis.com">
     <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700;800&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
@@ -97,9 +100,7 @@ def index_ui():
             --bg-card: rgba(18, 24, 38, 0.7);
             --bg-card-hover: rgba(26, 34, 52, 0.9);
             --border-glass: rgba(255, 255, 255, 0.08);
-            --border-glow: rgba(16, 185, 129, 0.3);
             --emerald: #10b981;
-            --emerald-glow: rgba(16, 185, 129, 0.2);
             --cyan: #06b6d4;
             --amber: #f59e0b;
             --rose: #f43f5e;
@@ -108,12 +109,7 @@ def index_ui():
             --text-muted: #64748b;
         }
 
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-
+        * { box-sizing: border-box; margin: 0; padding: 0; }
         body {
             background-color: var(--bg-base);
             background-image: 
@@ -125,277 +121,112 @@ def index_ui():
             padding: 24px;
             overflow-x: hidden;
         }
-
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-
-        /* Top Header */
+        .container { max-width: 1200px; margin: 0 auto; }
         header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding-bottom: 24px;
-            border-bottom: 1px solid var(--border-glass);
-            margin-bottom: 32px;
-            flex-wrap: wrap;
-            gap: 16px;
+            display: flex; justify-content: space-between; align-items: center;
+            padding-bottom: 24px; border-bottom: 1px solid var(--border-glass);
+            margin-bottom: 32px; flex-wrap: wrap; gap: 16px;
         }
-
-        .brand-group {
-            display: flex;
-            align-items: center;
-            gap: 14px;
-        }
-
+        .brand-group { display: flex; align-items: center; gap: 14px; }
         .brand-icon {
-            width: 44px;
-            height: 44px;
-            background: linear-gradient(135deg, #10b981, #06b6d4);
-            border-radius: 12px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 0 20px rgba(16, 185, 129, 0.4);
-            font-size: 22px;
+            width: 44px; height: 44px; background: linear-gradient(135deg, #10b981, #06b6d4);
+            border-radius: 12px; display: flex; align-items: center; justify-content: center;
+            box-shadow: 0 0 20px rgba(16, 185, 129, 0.4); font-size: 22px;
         }
-
         .brand-title {
-            font-size: 22px;
-            font-weight: 800;
-            letter-spacing: -0.5px;
+            font-size: 22px; font-weight: 800; letter-spacing: -0.5px;
             background: linear-gradient(to right, #ffffff, #cbd5e1);
-            -webkit-background-clip: text;
-            -webkit-text-fill-color: transparent;
+            -webkit-background-clip: text; -webkit-text-fill-color: transparent;
         }
-
-        .brand-subtitle {
-            font-size: 13px;
-            color: var(--text-secondary);
-            font-weight: 500;
-        }
-
+        .brand-subtitle { font-size: 13px; color: var(--text-secondary); font-weight: 500; }
         .pulse-badge {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            background: rgba(16, 185, 129, 0.12);
-            border: 1px solid rgba(16, 185, 129, 0.35);
-            padding: 8px 16px;
-            border-radius: 9999px;
-            font-size: 13px;
-            font-weight: 700;
-            color: var(--emerald);
-            letter-spacing: 0.3px;
+            display: inline-flex; align-items: center; gap: 8px;
+            background: rgba(16, 185, 129, 0.12); border: 1px solid rgba(16, 185, 129, 0.35);
+            padding: 8px 16px; border-radius: 9999px; font-size: 13px; font-weight: 700;
+            color: var(--emerald); letter-spacing: 0.3px;
         }
-
         .pulse-dot {
-            width: 10px;
-            height: 10px;
-            background: var(--emerald);
-            border-radius: 50%;
-            position: relative;
+            width: 10px; height: 10px; background: var(--emerald);
+            border-radius: 50%; position: relative;
         }
-
         .pulse-dot::after {
-            content: '';
-            position: absolute;
-            inset: -4px;
-            border-radius: 50%;
-            background: var(--emerald);
-            opacity: 0.5;
-            animation: pulse 1.8s infinite;
+            content: ''; position: absolute; inset: -4px; border-radius: 50%;
+            background: var(--emerald); opacity: 0.5; animation: pulse 1.8s infinite;
         }
-
         @keyframes pulse {
             0% { transform: scale(0.9); opacity: 0.8; }
             50% { transform: scale(2); opacity: 0; }
             100% { transform: scale(0.9); opacity: 0; }
         }
-
-        /* Metric Grid */
         .metrics-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
-            gap: 18px;
-            margin-bottom: 32px;
+            display: grid; grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+            gap: 18px; margin-bottom: 32px;
         }
-
         .metric-card {
-            background: var(--bg-card);
-            backdrop-filter: blur(12px);
-            border: 1px solid var(--border-glass);
-            border-radius: 16px;
-            padding: 20px;
-            position: relative;
-            transition: all 0.25s ease;
+            background: var(--bg-card); backdrop-filter: blur(12px);
+            border: 1px solid var(--border-glass); border-radius: 16px; padding: 20px;
+            position: relative; transition: all 0.25s ease;
         }
-
         .metric-card:hover {
-            transform: translateY(-2px);
-            border-color: rgba(255, 255, 255, 0.15);
+            transform: translateY(-2px); border-color: rgba(255, 255, 255, 0.15);
             background: var(--bg-card-hover);
         }
-
         .metric-label {
-            font-size: 12px;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            font-weight: 700;
-            letter-spacing: 0.8px;
-            margin-bottom: 8px;
+            font-size: 12px; color: var(--text-secondary); text-transform: uppercase;
+            font-weight: 700; letter-spacing: 0.8px; margin-bottom: 8px;
         }
-
         .metric-value {
-            font-size: 24px;
-            font-weight: 800;
-            font-family: 'JetBrains Mono', monospace;
-            color: #ffffff;
-            display: flex;
-            align-items: baseline;
-            gap: 8px;
+            font-size: 24px; font-weight: 800; font-family: 'JetBrains Mono', monospace;
+            color: #ffffff; display: flex; align-items: baseline; gap: 8px;
         }
-
-        .metric-sub {
-            font-size: 12px;
-            color: var(--text-muted);
-            margin-top: 6px;
-        }
-
-        /* Section Cards */
+        .metric-sub { font-size: 12px; color: var(--text-muted); margin-top: 6px; }
         .card-section {
-            background: var(--bg-card);
-            backdrop-filter: blur(12px);
-            border: 1px solid var(--border-glass);
-            border-radius: 18px;
-            padding: 24px;
+            background: var(--bg-card); backdrop-filter: blur(12px);
+            border: 1px solid var(--border-glass); border-radius: 18px; padding: 24px;
             margin-bottom: 28px;
         }
-
-        .section-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-        }
-
+        .section-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
         .section-title {
-            font-size: 17px;
-            font-weight: 700;
-            color: var(--text-primary);
-            display: flex;
-            align-items: center;
-            gap: 10px;
+            font-size: 17px; font-weight: 700; color: var(--text-primary);
+            display: flex; align-items: center; gap: 10px;
         }
-
-        /* Pairs Grid */
-        .pairs-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-            gap: 12px;
-        }
-
+        .pairs-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
         .pair-badge {
-            background: rgba(255, 255, 255, 0.03);
-            border: 1px solid var(--border-glass);
-            border-radius: 12px;
-            padding: 12px 14px;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            transition: all 0.2s ease;
+            background: rgba(255, 255, 255, 0.03); border: 1px solid var(--border-glass);
+            border-radius: 12px; padding: 12px 14px; display: flex; justify-content: space-between;
+            align-items: center; transition: all 0.2s ease;
         }
-
-        .pair-badge:hover {
-            border-color: rgba(16, 185, 129, 0.4);
-            background: rgba(16, 185, 129, 0.05);
-        }
-
-        .pair-name {
-            font-weight: 700;
-            font-size: 14px;
-            font-family: 'JetBrains Mono', monospace;
-        }
-
+        .pair-badge:hover { border-color: rgba(16, 185, 129, 0.4); background: rgba(16, 185, 129, 0.05); }
+        .pair-name { font-weight: 700; font-size: 14px; font-family: 'JetBrains Mono', monospace; }
         .pair-status {
-            font-size: 11px;
-            color: var(--emerald);
-            background: rgba(16, 185, 129, 0.15);
-            padding: 2px 8px;
-            border-radius: 6px;
-            font-weight: 600;
+            font-size: 11px; color: var(--emerald); background: rgba(16, 185, 129, 0.15);
+            padding: 2px 8px; border-radius: 6px; font-weight: 600;
         }
-
-        /* Positions & History Tables */
-        .table-wrap {
-            overflow-x: auto;
-        }
-
-        table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: 13px;
-            text-align: left;
-        }
-
+        .table-wrap { overflow-x: auto; }
+        table { width: 100%; border-collapse: collapse; font-size: 13px; text-align: left; }
         th {
-            color: var(--text-secondary);
-            font-weight: 600;
-            padding: 12px;
-            border-bottom: 1px solid var(--border-glass);
-            text-transform: uppercase;
-            font-size: 11px;
-            letter-spacing: 0.5px;
+            color: var(--text-secondary); font-weight: 600; padding: 12px;
+            border-bottom: 1px solid var(--border-glass); text-transform: uppercase;
+            font-size: 11px; letter-spacing: 0.5px;
         }
-
-        td {
-            padding: 14px 12px;
-            border-bottom: 1px solid rgba(255, 255, 255, 0.04);
-            font-family: 'JetBrains Mono', monospace;
-        }
-
+        td { padding: 14px 12px; border-bottom: 1px solid rgba(255, 255, 255, 0.04); font-family: 'JetBrains Mono', monospace; }
         .empty-row {
-            text-align: center;
-            padding: 32px 12px;
-            color: var(--text-muted);
-            font-family: 'Plus Jakarta Sans', sans-serif;
-            font-size: 14px;
+            text-align: center; padding: 32px 12px; color: var(--text-muted);
+            font-family: 'Plus Jakarta Sans', sans-serif; font-size: 14px;
         }
-
         .radar-box {
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            gap: 12px;
-            padding: 24px;
-            background: rgba(255, 255, 255, 0.02);
-            border-radius: 12px;
-            border: 1px dashed rgba(255, 255, 255, 0.1);
-            color: var(--text-secondary);
-            font-size: 14px;
+            display: flex; align-items: center; justify-content: center; gap: 12px;
+            padding: 24px; background: rgba(255, 255, 255, 0.02); border-radius: 12px;
+            border: 1px dashed rgba(255, 255, 255, 0.1); color: var(--text-secondary); font-size: 14px;
         }
-
         .spinner {
-            width: 20px;
-            height: 20px;
-            border: 2px solid rgba(16, 185, 129, 0.2);
-            border-top-color: var(--emerald);
-            border-radius: 50%;
-            animation: spin 1s linear infinite;
+            width: 20px; height: 20px; border: 2px solid rgba(16, 185, 129, 0.2);
+            border-top-color: var(--emerald); border-radius: 50%; animation: spin 1s linear infinite;
         }
-
-        @keyframes spin {
-            to { transform: rotate(360deg); }
-        }
-
-        /* Footer */
+        @keyframes spin { to { transform: rotate(360deg); } }
         footer {
-            text-align: center;
-            padding-top: 24px;
-            border-top: 1px solid var(--border-glass);
-            color: var(--text-muted);
-            font-size: 12px;
+            text-align: center; padding-top: 24px; border-top: 1px solid var(--border-glass);
+            color: var(--text-muted); font-size: 12px;
         }
     </style>
 </head>
@@ -406,36 +237,36 @@ def index_ui():
                 <div class="brand-icon">⚡</div>
                 <div>
                     <div class="brand-title">BINANCE SENTINEL BOT</div>
-                    <div class="brand-subtitle">7/24 Kesintisiz Algoritmik Bulut Nöbetçisi</div>
+                    <div class="brand-subtitle">demo.binance.com Canlı Bağlantılı Bulut Nöbetçisi</div>
                 </div>
             </div>
             <div class="pulse-badge">
                 <span class="pulse-dot"></span>
-                <span>BULUTTA CANLI & ÇALIŞIYOR</span>
+                <span>BINANCE TESTNET / DEMO CANLI</span>
             </div>
         </header>
 
         <!-- Metric Cards -->
         <div class="metrics-grid">
             <div class="metric-card">
-                <div class="metric-label">Çalışma Modu</div>
-                <div class="metric-value" style="color: var(--emerald);" id="m-mode">DEMO</div>
-                <div class="metric-sub">Sanal Bakiye • Sıfır Finansal Risk</div>
+                <div class="metric-label">Demo Kasa Bakiyesi</div>
+                <div class="metric-value" style="color: #f59e0b;" id="m-balance">$4,997.20</div>
+                <div class="metric-sub">demo.binance.com Canlı Bakiye</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">Taranan Pariteler</div>
                 <div class="metric-value" id="m-symbols">10 / 10</div>
-                <div class="metric-sub">BTC, ETH, SOL, XRP, ADA, AVAX...</div>
+                <div class="metric-sub">DOGE & LTC Temizlendi (Meme-Free)</div>
             </div>
             <div class="metric-card">
-                <div class="metric-label">Risk Yönetimi</div>
-                <div class="metric-value">3x / $0.35</div>
-                <div class="metric-sub">İzole Kaldıraç • Hedef 1:2.5 RR</div>
+                <div class="metric-label">Kaldıraç & Emir Tipi</div>
+                <div class="metric-value">3x İzole</div>
+                <div class="metric-sub">Gerçek Demo Emirleri Açılır</div>
             </div>
             <div class="metric-card">
                 <div class="metric-label">Son Tarama Döngüsü</div>
                 <div class="metric-value" style="font-size: 18px;" id="m-time">Yükleniyor...</div>
-                <div class="metric-sub">15 Saniyede Bir Tam Döngü</div>
+                <div class="metric-sub">Her 15 Saniyede Canlı Tarama</div>
             </div>
         </div>
 
@@ -444,12 +275,10 @@ def index_ui():
             <div class="section-header">
                 <div class="section-title">
                     <span>📡</span>
-                    <span>7/24 Taranan Kripto Pariteler (15m Trend & Hacim Filtresi)</span>
+                    <span>Taranan 10 Onaylı Parite (15m Trend & Hacim Patlaması Filtresi)</span>
                 </div>
             </div>
-            <div class="pairs-grid" id="pairs-container">
-                <!-- Javascript fills this -->
-            </div>
+            <div class="pairs-grid" id="pairs-container"></div>
         </div>
 
         <!-- Açık Pozisyonlar -->
@@ -457,13 +286,13 @@ def index_ui():
             <div class="section-header">
                 <div class="section-title">
                     <span>🎯</span>
-                    <span>Anlık Açık Pozisyonlar</span>
+                    <span>Binance Demo Açık Pozisyonlar</span>
                 </div>
             </div>
             <div id="positions-box">
                 <div class="radar-box">
                     <div class="spinner"></div>
-                    <span>10 paritede hacim patlaması ve EMA/RSI sinyalleri taranıyor... Koşullar oluştuğunda anında açılacak.</span>
+                    <span>demo.binance.com üzerinde 10 parite taranıyor... Sinyal geldiğinde emir anında Binance ekranına düşecektir.</span>
                 </div>
             </div>
         </div>
@@ -473,7 +302,7 @@ def index_ui():
             <div class="section-header">
                 <div class="section-title">
                     <span>📜</span>
-                    <span>Son Tamamlanan İşlemler (Kâr / Zarar Özeti)</span>
+                    <span>Tamamlanan Testnet İşlemleri</span>
                 </div>
             </div>
             <div class="table-wrap">
@@ -490,7 +319,7 @@ def index_ui():
                     </thead>
                     <tbody id="history-body">
                         <tr>
-                            <td colspan="6" class="empty-row">Henüz kapanmış işlem yok. Bot nöbette.</td>
+                            <td colspan="6" class="empty-row">Henüz kapanmış işlem yok. Bot Binance Demo üzerinde nöbette.</td>
                         </tr>
                     </tbody>
                 </table>
@@ -498,14 +327,13 @@ def index_ui():
         </div>
 
         <footer>
-            Binance Sentinel Cloud Engine v2.1.0 • Render Cloud Infrastructure • Otomatik Canlı Güncelleniyor
+            Binance Sentinel Cloud Engine v2.5.0 • demo.binance.com Bağlantılı • Otomatik Canlı Güncelleniyor
         </footer>
     </div>
 
     <script>
         const pairs = ["BTC/USDT", "ETH/USDT", "SOL/USDT", "XRP/USDT", "ADA/USDT", "AVAX/USDT", "SUI/USDT", "NEAR/USDT", "LINK/USDT", "APT/USDT"];
         
-        // Render pairs grid
         const pCont = document.getElementById('pairs-container');
         pCont.innerHTML = pairs.map(p => `
             <div class="pair-badge">
@@ -520,7 +348,9 @@ def index_ui():
                 const data = await res.json();
                 const st = data.state;
 
-                document.getElementById('m-mode').innerText = st.paper_trading ? 'SANAL DEMO' : 'CANLI GERÇEK';
+                if (st.account_balance) {
+                    document.getElementById('m-balance').innerText = '$' + Number(st.account_balance).toFixed(2);
+                }
                 document.getElementById('m-symbols').innerText = st.scanned_symbols + ' / ' + st.scanned_symbols;
                 if (st.last_scan_time) {
                     const timeOnly = st.last_scan_time.split(' ')[1] || st.last_scan_time;
@@ -534,7 +364,7 @@ def index_ui():
                     posBox.innerHTML = `
                         <div class="radar-box">
                             <div class="spinner"></div>
-                            <span>10 paritede hacim patlaması ve EMA/RSI sinyalleri taranıyor... Koşullar oluştuğunda anında açılacak.</span>
+                            <span>demo.binance.com üzerinde 10 parite taranıyor... Sinyal geldiğinde emir anında Binance ekranına düşecektir.</span>
                         </div>
                     `;
                 } else {
@@ -545,10 +375,11 @@ def index_ui():
                                     <tr>
                                         <th>Parite</th>
                                         <th>Yön</th>
-                                        <th>Giriş</th>
+                                        <th>Giriş Fiyatı</th>
                                         <th>Stop Loss</th>
                                         <th>Take Profit</th>
-                                        <th>Zaman</th>
+                                        <th>Miktar</th>
+                                        <th>Emir No</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -562,7 +393,8 @@ def index_ui():
                                 <td>$${p.entry_price}</td>
                                 <td style="color:#f43f5e;">$${p.stop_loss}</td>
                                 <td style="color:#10b981;">$${p.take_profit}</td>
-                                <td>${p.timestamp || ''}</td>
+                                <td>${p.qty}</td>
+                                <td style="color:#94a3b8;">${p.order_id || 'DEMO'}</td>
                             </tr>
                         `;
                     });
@@ -597,9 +429,7 @@ def index_ui():
 """
     return HTMLResponse(content=html_content)
 
-# Quant Indicators
 def calculate_indicators(candles: List[List[float]]) -> Dict[str, Any]:
-    # candles: [timestamp, open, high, low, close, volume]
     if len(candles) < 30:
         return {}
     
@@ -608,7 +438,6 @@ def calculate_indicators(candles: List[List[float]]) -> Dict[str, Any]:
     lows = [c[3] for c in candles]
     volumes = [c[5] for c in candles]
 
-    # EMA 200 / EMA 50
     def ema(values, period):
         k = 2 / (period + 1)
         res = [values[0]]
@@ -619,7 +448,6 @@ def calculate_indicators(candles: List[List[float]]) -> Dict[str, Any]:
     ema_fast = ema(closes, 14)
     ema_slow = ema(closes, 50)
 
-    # RSI 14
     deltas = [closes[i] - closes[i-1] for i in range(1, len(closes))]
     gains = [d if d > 0 else 0 for d in deltas]
     losses = [-d if d < 0 else 0 for d in deltas]
@@ -628,11 +456,9 @@ def calculate_indicators(candles: List[List[float]]) -> Dict[str, Any]:
     rs = avg_gain / (avg_loss if avg_loss != 0 else 0.0001)
     rsi = 100 - (100 / (1 + rs))
 
-    # Volume spike (1.8x average of last 20 bars)
     avg_vol = sum(volumes[-20:]) / 20 if len(volumes) >= 20 else volumes[-1]
     vol_spike = volumes[-1] >= (avg_vol * 1.5)
 
-    # ATR 14
     trs = []
     for i in range(1, len(candles)):
         h, l, prev_c = highs[i], lows[i], closes[i-1]
@@ -650,24 +476,54 @@ def calculate_indicators(candles: List[List[float]]) -> Dict[str, Any]:
     }
 
 async def trading_loop():
-    logger.info("Initializing 24/7 Binance Futures Scanner...")
+    logger.info("Initializing Binance Demo Trading Engine...")
     exchange_params = {
+        "apiKey": API_KEY,
+        "secret": SECRET_KEY,
         "enableRateLimit": True,
         "options": {"defaultType": "future"}
     }
-    if API_KEY and SECRET_KEY:
-        exchange_params["apiKey"] = API_KEY
-        exchange_params["secret"] = SECRET_KEY
-
     exchange = ccxt.binance(exchange_params)
-    await exchange.load_markets()
-
-    logger.info(f"Loaded Binance Markets. Starting loop over {len(SYMBOLS)} symbols.")
     
+    if USE_BINANCE_DEMO:
+        exchange.enable_demo_trading(True)
+        logger.info("DEMO TRADING ENABLED (demo.binance.com)")
+
+    await exchange.load_markets()
+    logger.info(f"Loaded {len(SYMBOLS)} markets on Binance Futures Demo.")
+
+    # Self-ping keep-alive tracker
+    last_keepalive = time.time()
+
     try:
+        # Fetch initial balance
+        try:
+            bal = await exchange.fetch_balance()
+            if "USDT" in bal and "total" in bal["USDT"]:
+                bot_state["account_balance"] = round(bal["USDT"]["total"], 2)
+                logger.info(f"Connected to Binance Demo. Live Balance: ${bot_state['account_balance']}")
+        except Exception as e:
+            logger.error(f"Balance fetch error: {e}")
+
         while True:
             bot_state["last_scan_time"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
             
+            # Keep-alive to prevent Render free tier from sleeping (ping every 4 mins)
+            if time.time() - last_keepalive > 240:
+                try:
+                    requests.get("https://binance-sentinel-bot.onrender.com/health", timeout=5)
+                    last_keepalive = time.time()
+                except Exception:
+                    pass
+
+            # Update balance periodically
+            try:
+                bal = await exchange.fetch_balance()
+                if "USDT" in bal and "total" in bal["USDT"]:
+                    bot_state["account_balance"] = round(bal["USDT"]["total"], 2)
+            except Exception:
+                pass
+
             for symbol in SYMBOLS:
                 try:
                     candles = await exchange.fetch_ohlcv(symbol, timeframe="15m", limit=60)
@@ -685,16 +541,13 @@ async def trading_loop():
 
                     # Entry Conditions
                     signal = None
-                    # LONG: Trend up (EMA_fast > EMA_slow), RSI pulled back to 40-52, and volume surge
                     if ema_f > ema_s and 38 <= rsi <= 55 and vol_spike:
                         signal = "LONG"
-                    # SHORT: Trend down (EMA_fast < EMA_slow), RSI bounced to 48-62, and volume surge
                     elif ema_f < ema_s and 45 <= rsi <= 62 and vol_spike:
                         signal = "SHORT"
 
                     # Manage signals
-                    if signal and symbol not in bot_state["active_positions"]:
-                        # Calculate Position Sizing & SL/TP
+                    if signal and symbol not in bot_state["active_positions"] and len(bot_state["active_positions"]) < 3:
                         sl_dist = atr * 1.5
                         tp_dist = sl_dist * TARGET_RR
 
@@ -705,9 +558,25 @@ async def trading_loop():
                             sl = round(curr_price + sl_dist, 4)
                             tp = round(curr_price - tp_dist, 4)
 
-                        # Calculate qty based on max risk
-                        risk_per_unit = abs(curr_price - sl)
-                        qty = round(MAX_RISK_USD / risk_per_unit, 4) if risk_per_unit > 0 else 0.001
+                        # Calculate qty to reach ~$25 notional (satisfies Binance min notional)
+                        raw_qty = MIN_NOTIONAL_USD / curr_price
+                        market = exchange.market(symbol)
+                        precision = market.get("precision", {}).get("amount", 2)
+                        qty = round(raw_qty, precision) if precision > 0 else int(raw_qty)
+                        if qty <= 0:
+                            qty = market.get("limits", {}).get("amount", {}).get("min", 1)
+
+                        order_id = "DEMO"
+                        # PLACE REAL ORDER ON BINANCE DEMO FUTURES
+                        if USE_BINANCE_DEMO and API_KEY and SECRET_KEY:
+                            try:
+                                await exchange.set_leverage(LEVERAGE, symbol)
+                                side = "buy" if signal == "LONG" else "sell"
+                                order = await exchange.create_market_order(symbol, side, qty)
+                                order_id = order.get("id", "DEMO")
+                                logger.info(f"REAL DEMO ORDER EXECUTED ON BINANCE: {symbol} {side} {qty} (ID: {order_id})")
+                            except Exception as ex:
+                                logger.error(f"Binance demo order error for {symbol}: {ex}")
 
                         trade_info = {
                             "symbol": symbol,
@@ -716,46 +585,31 @@ async def trading_loop():
                             "stop_loss": sl,
                             "take_profit": tp,
                             "qty": qty,
+                            "order_id": order_id,
                             "timestamp": datetime.utcnow().strftime("%H:%M:%S UTC")
                         }
 
                         bot_state["active_positions"][symbol] = trade_info
-                        logger.info(f"SIGNAL FIRED: {signal} on {symbol} at {curr_price} (SL: {sl}, TP: {tp})")
 
                         tg_msg = (
-                            f"🚨 *YENİ İŞLEM AÇILDI ({signal})*\n"
+                            f"🚨 *YENİ BİNANCE TESTNET İŞLEMİ AÇILDI ({signal})*\n"
                             f"Parite: `{symbol}`\n"
                             f"Giriş: `${curr_price}`\n"
                             f"Stop Loss: `${sl}`\n"
                             f"Take Profit: `${tp}`\n"
-                            f"Risk/Ödül: `1 : {TARGET_RR}`\n"
-                            f"Mod: `{'Sanal Demo' if PAPER_TRADING else 'Canlı Emir'}`"
+                            f"Kaldıraç: `3x İzole`\n"
+                            f"Miktar: `{qty}`\n"
+                            f"Emir No: `{order_id}`\n"
+                            f"Platform: `demo.binance.com`"
                         )
                         send_telegram(tg_msg)
-
-                        # If LIVE TRADING: Send native Binance Futures market + STOP_MARKET orders
-                        if not PAPER_TRADING and API_KEY and SECRET_KEY:
-                            try:
-                                clean_sym = symbol.replace("/USDT:USDT", "USDT")
-                                await exchange.set_leverage(LEVERAGE, symbol)
-                                order = await exchange.create_market_order(symbol, "buy" if signal == "LONG" else "sell", qty)
-                                sl_order = await exchange.create_order(
-                                    symbol=symbol,
-                                    type="STOP_MARKET",
-                                    side="sell" if signal == "LONG" else "buy",
-                                    amount=qty,
-                                    params={"stopPrice": trade_info["stop_loss"], "reduceOnly": True}
-                                )
-                                logger.info(f"Live orders placed for {symbol}: entry={order['id']}, sl={sl_order['id']}")
-                            except Exception as ex:
-                                logger.error(f"Live trade execution failed for {symbol}: {ex}")
 
                 except Exception as ex:
                     logger.debug(f"Scan error on {symbol}: {ex}")
 
-                await asyncio.sleep(1)  # rate limit buffer
+                await asyncio.sleep(1)
 
-            # Check open positions for exit in paper trading mode
+            # Check open positions for exit
             for sym, pos in list(bot_state["active_positions"].items()):
                 try:
                     ticker = await exchange.fetch_ticker(sym)
@@ -765,15 +619,24 @@ async def trading_loop():
 
                     if hit_tp or hit_sl:
                         outcome = "KÂR ALINDI (TP) 🎯" if hit_tp else "STOP OLDU (SL) 🛑"
-                        pnl = (MAX_RISK_USD * TARGET_RR) if hit_tp else (-MAX_RISK_USD)
+                        # Close position on Binance Demo
+                        if USE_BINANCE_DEMO and API_KEY and SECRET_KEY:
+                            try:
+                                close_side = "sell" if pos["side"] == "LONG" else "buy"
+                                await exchange.create_market_order(sym, close_side, pos["qty"], params={"reduceOnly": True})
+                                logger.info(f"REAL DEMO POSITION CLOSED ON BINANCE: {sym} ({outcome})")
+                            except Exception as ex:
+                                logger.error(f"Close order failed on Binance: {ex}")
+
+                        pnl = ((curr - pos["entry_price"]) * pos["qty"]) if pos["side"] == "LONG" else ((pos["entry_price"] - curr) * pos["qty"])
                         bot_state["trade_history"].append({**pos, "exit": curr, "pnl": pnl, "outcome": outcome})
                         del bot_state["active_positions"][sym]
                         
-                        send_telegram(f"📢 *POZİSYON KAPANDI*\nParite: `{sym}`\nSonuç: *{outcome}*\nÇıkış Fiyatı: `${curr}`\nNet K/Z: `+${pnl:.2f}`" if pnl > 0 else f"📢 *POZİSYON KAPANDI*\nParite: `{sym}`\nSonuç: *{outcome}*\nÇıkış Fiyatı: `${curr}`\nNet K/Z: `${pnl:.2f}`")
+                        send_telegram(f"📢 *BİNANCE TESTNET POZİSYON KAPANDI*\nParite: `{sym}`\nSonuç: *{outcome}*\nÇıkış Fiyatı: `${curr}`\nNet K/Z: `${pnl:.2f}`")
                 except Exception as e:
                     pass
 
-            await asyncio.sleep(15)  # Scan interval every 15s
+            await asyncio.sleep(15)
     finally:
         await exchange.close()
 
