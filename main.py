@@ -611,7 +611,7 @@ async def trading_loop():
                             send_telegram(tg_msg)
 
                     except Exception as ex:
-                        logger.debug(f"Scan error on {symbol}: {ex}")
+                        bot_state["last_symbol_error"] = f"{symbol}: {ex}"; logger.info(f"Scan error on {symbol}: {ex}")
 
                     await asyncio.sleep(0.5)
 
