@@ -46,6 +46,8 @@ MIN_NOTIONAL_USD = 25.0  # Minimum order notional to safely clear Binance Future
 app = FastAPI(title="Binance Sentinel Bot", version="2.5.0")
 
 # State
+thread_error = None
+
 bot_state = {
     "status": "RUNNING",
     "mode": "BINANCE_DEMO_LIVE" if USE_BINANCE_DEMO else "LOCAL_SIMULATION",
@@ -56,7 +58,8 @@ bot_state = {
     "trade_history": [],
     "last_scan_time": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
     "cycle_count": 0,
-    "market_prices": {}
+    "market_prices": {},
+    "thread_error": None
 }
 
 def send_telegram(msg: str):
@@ -76,6 +79,7 @@ def favicon():
 
 @app.get("/api/state")
 def get_state():
+    bot_state["thread_error"] = thread_error
     return {
         "bot": "Binance Sentinel Multi-Pair Bot (Demo Futures Connected)",
         "state": bot_state,
@@ -630,10 +634,16 @@ async def trading_loop():
         logger.critical(f"FATAL trading_loop initialization error: {fatal_ex}")
 
 def start_bot_thread():
-    asyncio.run(trading_loop())
+    global thread_error
+    try:
+        asyncio.run(trading_loop())
+    except Exception as e:
+        import traceback
+        thread_error = traceback.format_exc()
+        logger.critical(f"THREAD CRASHED: {thread_error}")
 
-# Start autonomous trading loop in a dedicated background daemon thread
-threading.Thread(target=start_bot_thread, daemon=True).start()
+bot_thread = threading.Thread(target=start_bot_thread, daemon=True)
+bot_thread.start()
 
 if __name__ == "__main__":
     uvicorn.run("main:app", host="0.0.0.0", port=PORT)
