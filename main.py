@@ -513,7 +513,7 @@ async def trading_loop():
                     'private': 'https://demo-api.binance.com/api/v3',
                     'v1': 'https://demo-api.binance.com/api/v1',
                 })
-                exchange.urls['api'] = demo_urls
+                exchange.urls['api'].update(demo_urls)
                 exchange.options['enableDemoTrading'] = True
             logger.info("DEMO TRADING ENABLED (demo.binance.com)")
 
