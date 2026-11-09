@@ -492,37 +492,17 @@ async def trading_loop():
     await exchange.load_markets()
     logger.info(f"Loaded {len(SYMBOLS)} markets on Binance Futures Demo.")
 
-    # Self-ping keep-alive tracker
-    last_keepalive = time.time()
-
-    try:
-        # Fetch initial balance
+    while True:
         try:
-            bal = await exchange.fetch_balance()
-            if "USDT" in bal and "total" in bal["USDT"]:
-                bot_state["account_balance"] = round(bal["USDT"]["total"], 2)
-                logger.info(f"Connected to Binance Demo. Live Balance: ${bot_state['account_balance']}")
-        except Exception as e:
-            logger.error(f"Balance fetch error: {e}")
-
-        while True:
             bot_state["last_scan_time"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
-            
-            # Keep-alive to prevent Render free tier from sleeping (ping every 4 mins)
-            if time.time() - last_keepalive > 240:
-                try:
-                    requests.get("https://binance-sentinel-bot.onrender.com/health", timeout=5)
-                    last_keepalive = time.time()
-                except Exception:
-                    pass
 
             # Update balance periodically
             try:
                 bal = await exchange.fetch_balance()
                 if "USDT" in bal and "total" in bal["USDT"]:
                     bot_state["account_balance"] = round(bal["USDT"]["total"], 2)
-            except Exception:
-                pass
+            except Exception as be:
+                logger.debug(f"Balance check notice: {be}")
 
             for symbol in SYMBOLS:
                 try:
@@ -558,7 +538,6 @@ async def trading_loop():
                             sl = round(curr_price + sl_dist, 4)
                             tp = round(curr_price - tp_dist, 4)
 
-                        # Calculate qty to reach ~$25 notional (satisfies Binance min notional)
                         raw_qty = MIN_NOTIONAL_USD / curr_price
                         market = exchange.market(symbol)
                         precision = market.get("precision", {}).get("amount", 2)
@@ -619,7 +598,6 @@ async def trading_loop():
 
                     if hit_tp or hit_sl:
                         outcome = "KÂR ALINDI (TP) 🎯" if hit_tp else "STOP OLDU (SL) 🛑"
-                        # Close position on Binance Demo
                         if USE_BINANCE_DEMO and API_KEY and SECRET_KEY:
                             try:
                                 close_side = "sell" if pos["side"] == "LONG" else "buy"
@@ -636,9 +614,10 @@ async def trading_loop():
                 except Exception as e:
                     pass
 
-            await asyncio.sleep(15)
-    finally:
-        await exchange.close()
+        except Exception as loop_ex:
+            logger.error(f"Global loop error caught, auto-recovering in 10s: {loop_ex}")
+
+        await asyncio.sleep(15)
 
 @app.on_event("startup")
 async def startup_event():
