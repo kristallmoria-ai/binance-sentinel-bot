@@ -41,7 +41,8 @@ SYMBOLS = [
 
 LEVERAGE = 3  # Safe 3x isolated leverage
 TARGET_RR = 2.0  # 1 : 2.0 Risk-to-Reward ratio
-MIN_NOTIONAL_USD = 25.0  # Minimum order notional to safely clear Binance Futures thresholds (~$8 margin at 3x)
+VIRTUAL_START_BALANCE = 12.00  # Realistic 12 USDT user budget
+MIN_NOTIONAL_USD = 6.0  # ~$2.00 USDT margin per trade at 3x leverage (perfect for $12 wallet)
 
 app = FastAPI(title="Binance Sentinel Bot", version="2.5.0")
 
@@ -53,7 +54,7 @@ bot_state = {
     "mode": "BINANCE_DEMO_LIVE" if USE_BINANCE_DEMO else "LOCAL_SIMULATION",
     "scanned_symbols": len(SYMBOLS),
     "symbols_list": [s.replace(":USDT", "") for s in SYMBOLS],
-    "account_balance": 4997.20,
+    "account_balance": 12.00,
     "active_positions": {},
     "trade_history": [],
     "last_scan_time": datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC"),
@@ -482,6 +483,24 @@ def calculate_indicators(candles: List[List[float]]) -> Dict[str, Any]:
         "atr": atr
     }
 
+def get_order_qty(symbol: str, price: float, notional: float = 6.0) -> float:
+    raw = notional / price
+    if "BTC" in symbol:
+        return 0.001
+    elif "ETH" in symbol:
+        return round(max(raw, 0.003), 3)
+    elif "SOL" in symbol:
+        return round(max(raw, 0.05), 2)
+    elif "ADA" in symbol:
+        return round(max(raw, 30.0), 0)
+    elif "XRP" in symbol:
+        return round(max(raw, 5.0), 1)
+    elif any(k in symbol for k in ["AVAX", "NEAR", "LINK"]):
+        return round(max(raw, 0.5), 2)
+    elif any(k in symbol for k in ["SUI", "APT"]):
+        return round(max(raw, 5.0), 1)
+    return round(max(raw, 0.1), 2)
+
 async def trading_loop():
     global thread_error
     logger.info("Initializing Binance Demo Trading Engine...")
@@ -525,13 +544,12 @@ async def trading_loop():
                 bot_state["cycle_count"] += 1
                 bot_state["last_scan_time"] = datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S UTC")
 
-                # Update balance periodically
+                # Realistic $12 virtual balance calculation + net PnL tracking
                 try:
-                    bal = await exchange.fetch_balance()
-                    if "USDT" in bal and "total" in bal["USDT"]:
-                        bot_state["account_balance"] = round(bal["USDT"]["total"], 2)
+                    total_pnl = sum([t.get("pnl", 0.0) for t in bot_state["trade_history"]])
+                    bot_state["account_balance"] = round(VIRTUAL_START_BALANCE + total_pnl, 2)
                 except Exception as be:
-                    logger.debug(f"Balance check notice: {be}")
+                    pass
 
                 for symbol in SYMBOLS:
                     try:
@@ -576,10 +594,7 @@ async def trading_loop():
                                 sl = round(curr_price + sl_dist, 4)
                                 tp = round(curr_price - tp_dist, 4)
 
-                            raw_qty = MIN_NOTIONAL_USD / curr_price
-                            qty = round(raw_qty, 2)
-                            if qty <= 0:
-                                qty = 1.0
+                            qty = get_order_qty(symbol, curr_price, MIN_NOTIONAL_USD)
 
                             order_id = "DEMO"
                             # PLACE REAL ORDER ON BINANCE DEMO FUTURES
