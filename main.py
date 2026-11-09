@@ -483,6 +483,7 @@ def calculate_indicators(candles: List[List[float]]) -> Dict[str, Any]:
     }
 
 async def trading_loop():
+    global thread_error
     logger.info("Initializing Binance Demo Trading Engine...")
     try:
         exchange_params = {
@@ -495,9 +496,28 @@ async def trading_loop():
         exchange = ccxt.binance(exchange_params)
         
         if USE_BINANCE_DEMO:
-            exchange.enable_demo_trading(True)
+            if hasattr(exchange, 'enable_demo_trading'):
+                exchange.enable_demo_trading(True)
+            else:
+                demo_urls = exchange.urls.get('demo', {
+                    'dapiPublic': 'https://demo-dapi.binance.com/dapi/v1',
+                    'dapiPrivate': 'https://demo-dapi.binance.com/dapi/v1',
+                    'dapiPrivateV2': 'https://demo-dapi.binance.com/dapi/v2',
+                    'fapiPublic': 'https://demo-fapi.binance.com/fapi/v1',
+                    'fapiPublicV2': 'https://demo-fapi.binance.com/fapi/v2',
+                    'fapiPublicV3': 'https://demo-fapi.binance.com/fapi/v3',
+                    'fapiPrivate': 'https://demo-fapi.binance.com/fapi/v1',
+                    'fapiPrivateV2': 'https://demo-fapi.binance.com/fapi/v2',
+                    'fapiPrivateV3': 'https://demo-fapi.binance.com/fapi/v3',
+                    'public': 'https://demo-api.binance.com/api/v3',
+                    'private': 'https://demo-api.binance.com/api/v3',
+                    'v1': 'https://demo-api.binance.com/api/v1',
+                })
+                exchange.urls['api'] = demo_urls
+                exchange.options['enableDemoTrading'] = True
             logger.info("DEMO TRADING ENABLED (demo.binance.com)")
 
+        thread_error = None
         logger.info(f"Initialized CCXT Binance Demo engine for {len(SYMBOLS)} symbols.")
 
         while True:
@@ -629,7 +649,6 @@ async def trading_loop():
             await asyncio.sleep(10)
 
     except Exception as fatal_ex:
-        global thread_error
         import traceback
         thread_error = traceback.format_exc()
         logger.critical(f"FATAL trading_loop initialization error: {fatal_ex}")
