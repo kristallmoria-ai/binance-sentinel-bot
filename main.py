@@ -541,7 +541,10 @@ async def trading_loop():
                             pair = symbol.replace("/USDT:USDT", "USDT").replace("/USDT", "USDT")
                             url = f"https://demo-fapi.binance.com/fapi/v1/klines?symbol={pair}&interval=15m&limit=60"
                             resp = requests.get(url, timeout=5).json()
-                            candles = [[float(x) for x in k[:6]] for k in resp]
+                            if isinstance(resp, list) and len(resp) > 0 and isinstance(resp[0], list):
+                                candles = [[float(x) for x in k[:6]] for k in resp]
+                            else:
+                                continue
                         ind = calculate_indicators(candles)
                         if not ind:
                             continue
